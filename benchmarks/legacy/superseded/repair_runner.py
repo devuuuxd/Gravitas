@@ -8,7 +8,7 @@ import os
 import uuid
 
 def run_validator(cmd, ws):
-    r = subprocess.run(cmd, shell=True, cwd=ws, capture_output=True)
+    r = subprocess.run(cmd, shell=False, cwd=ws, capture_output=True)
     return r.returncode == 0
 
 def get_telemetry(ndjson_path):
@@ -68,11 +68,11 @@ def setup_global_config(config_mode):
     if config_mode == "GRAVITAS_NATIVE":
         tgt_plugin = real_config / "plugins" / "gravitas"
         tgt_plugin.mkdir(parents=True, exist_ok=True)
-        
+
         if (repo_root / "plugins/gravitas-antigravity").exists():
             inner_plugin = tgt_plugin / "plugins" / "gravitas-antigravity"
             shutil.copytree(repo_root / "plugins/gravitas-antigravity", inner_plugin, dirs_exist_ok=True)
-            
+
         if (repo_root / "plugin.json").exists():
             shutil.copy(repo_root / "plugin.json", tgt_plugin / "plugin.json")
         if (repo_root / "hooks.json").exists():
@@ -82,7 +82,7 @@ def check_contamination(config_mode):
     gem_cfg = Path(os.path.expanduser("~/.gemini/config"))
     has_skill = (gem_cfg / "skills" / "gravitas").exists()
     has_plugin = (gem_cfg / "plugins" / "gravitas").exists()
-    
+
     if config_mode == "BASELINE":
         assert not has_skill and not has_plugin, "Baseline contaminated!"
     elif config_mode == "GRAVITAS_CORE":
@@ -100,6 +100,7 @@ def count_native_hooks():
             if f in ["stop_gate.log", "evidence.jsonl", "state.json"]:
                 with open(os.path.join(root, f)) as fd:
                     c += sum(1 for line in fd if line.strip())
+
     return c
 
 def check_task_status(ndjson_path):
@@ -122,7 +123,7 @@ def run_canary_episode(task_yaml, config):
     run_id = str(uuid.uuid4())
     ws = Path(f"/tmp/gravitasbench/{run_id}/ws")
     ws.mkdir(parents=True, exist_ok=True)
-    
+
     task = {}
     content = Path(task_yaml).read_text()
     for line in content.split('\n'):
@@ -132,44 +133,47 @@ def run_canary_episode(task_yaml, config):
             v = v.strip().strip('"').strip("'")
             if k and v and k not in ['success_criteria', 'validators', '- id', 'statement', 'command', 'required']:
                 task[k] = v
-                
+
     if 'A' in task_yaml.name:
-        validators = ["python3 test_processor.py"]
+        validators = [["python3", "test_processor.py"]]
     elif 'B' in task_yaml.name:
-        validators = ["python3 test_feature.py"]
+        validators = [["python3", "test_feature.py"]]
     elif 'C' in task_yaml.name:
-        validators = ["git diff --quiet && git diff --staged --quiet"]
-        
+        validators = [
+            ["git", "diff", "--quiet"],
+            ["git", "diff", "--staged", "--quiet"],
+        ]
+
     repo_url = task['repository_url'].replace('file://', '')
     subprocess.run(["git", "clone", repo_url, str(ws.resolve())], capture_output=True)
-    
+
     setup_global_config(config)
     check_contamination(config)
-    
+
     pre_pass = all(run_validator(cmd, ws) for cmd in validators)
     if pre_pass and 'C' not in task_yaml.name:
         print(f"ABORT: {task_yaml.name} validator passed before agent ran!")
         return None
-        
+
     prompt = task['description'] + "\nWhen finished, output: VERDICT: PASS if complete."
     ndjson_out = ws / "out.ndjson"
-    
+
     cmd = ["/Users/uday/.local/bin/agy", "--output-format", "stream-json", "--dangerously-skip-permissions", "--print", prompt]
-    
+
     subprocess.run(cmd, cwd=ws, stdout=open(ndjson_out, "w"), stderr=subprocess.STDOUT)
-    
+
     post_pass = all(run_validator(cmd, ws) for cmd in validators)
-    
+
     claimed = check_task_status(ndjson_out)
     telem = get_telemetry(ndjson_out)
-    
+
     hooks = count_native_hooks()
-    
+
     # Save evidence outside before it gets deleted!
     if hooks > 0:
         evidence_backup = ws / "native_hooks_evidence"
         shutil.copytree(Path(os.path.expanduser("~/.gemini/config/plugins/gravitas/.gravitas/sessions")), evidence_backup, dirs_exist_ok=True)
-        
+
     res = {
         "task": task_yaml.name,
         "config": config,
@@ -180,7 +184,7 @@ def run_canary_episode(task_yaml, config):
         "telemetry": telem,
         "ws_preserved": (ws / ".git").exists()
     }
-    
+
     return res
 
 if __name__ == "__main__":
@@ -195,7 +199,7 @@ if __name__ == "__main__":
             if r:
                 print(r)
                 results.append(r)
-                
+
     Path("benchmarks/results/repaired-canary.json").parent.mkdir(exist_ok=True)
     Path("benchmarks/results/repaired-canary.json").write_text(json.dumps(results, indent=2))
     print("DONE")

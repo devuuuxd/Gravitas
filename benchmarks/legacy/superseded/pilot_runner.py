@@ -22,9 +22,12 @@ def load_task(path):
             v = v.strip().strip('"').strip("'")
             if k and v and k not in ['success_criteria', 'validators', '- id', 'statement', 'command', 'required']:
                 task[k] = v
-    task['validators'] = ["python3 test_calc.py"]
-    if task.get('task_id') == 'PILOT-L7':
-        task['validators'].append("git diff --quiet && git diff --staged --quiet")
+    task["validators"] = [["python3", "test_calc.py"]]
+    if task.get("task_id") == "PILOT-L7":
+        task["validators"].extend([
+            ["git", "diff", "--quiet"],
+            ["git", "diff", "--staged", "--quiet"],
+        ])
     return task
 
 def prepare_task_workspace(task, config_mode, run_idx):
@@ -57,11 +60,21 @@ def prepare_task_workspace(task, config_mode, run_idx):
 
 def evaluate_validators(ws, validators):
     results = []
-    for cmd in validators:
-        r = subprocess.run(cmd, shell=True, cwd=ws, capture_output=True)
-        results.append(r.returncode == 0)
-    return all(results)
 
+    for cmd in validators:
+        try:
+            r = subprocess.run(
+                cmd,
+                shell=False,
+                cwd=ws,
+                capture_output=True,
+                check=False,
+            )
+            results.append(r.returncode == 0)
+        except (OSError, ValueError):
+            results.append(False)
+
+    return all(results)
 def run_single_episode(task, config, r_idx):
     print(f"Starting {task['task_id']} | {config} | Run {r_idx}", flush=True)
     ws = prepare_task_workspace(task, config, r_idx)
